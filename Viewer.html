@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>DB Viewer (SQLite Edition)</title>
+    <!-- 引入 jQuery (維持原本風格) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <!-- 引入 SQL.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    
+    <style>
+        body { font-family: sans-serif; text-align: center; }
+        table { margin: 0 auto; background: #f9f9f9; }
+        td { padding: 10px; vertical-align: top; text-align: left; }
+        img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+        .loading-text { color: #666; font-style: italic; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<center>
+    <h1>Setu Viewer</h1>
+    <p class="loading-text" id="dbStatus">正在下載資料庫，請稍候...</p>
+    <hr />
+    
+    <table border="1">
+        <tr>
+            <td width="510" style="text-align: center;">
+                <!-- 預設圖片或 Loading 圖 -->
+                <img id="mainImg" src="/images/loading.svg" width="500" alt="Loading..."/>
+            </td>
+            <td width="250">
+                <p>PID: <span id="pid">Loading...</span></p>
+                <p>標題: <span id="title">Loading...</span></p>
+                <p>作者: <span id="author">Loading...</span></p>
+                <p>上傳時間: <span id="uploadDate">Loading...</span></p>
+                <p>Tags: <span id="tags">Loading...</span></p>
+            </td>
+        </tr>
+    </table>
+    
+    <p>
+        <button id="nextBtn" onclick="getRandomImage()" disabled>資料庫載入中...</button>
+    </p>
+    <hr />
+    Made By <a href="https://mayx.eu.org">Mayx</a> | Forked & Database by GitHub Actions
+</center>
+
+<script>
+    let db = null;
+    const dbFile = "./pixiv_index.db"; // 資料庫檔案路徑，請確認與 HTML 的相對位置
+
+    // 1. 初始化 SQL.js
+    const config = {
+        locateFile: filename => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${filename}`
+    };
+
+    initSqlJs(config).then(function(SQL) {
+        $("#dbStatus").text("正在下載資料庫 (pixiv_index.db)...");
+        
+        // 2. 下載 SQLite 資料庫檔案
+        fetch(dbFile)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error("無法下載資料庫，請確認檔案是否存在於: " + dbFile);
+                }
+                // 為了顯示下載進度 (可選)
+                const total = Number(response.headers.get('content-length'));
+                return response.arrayBuffer();
+            })
+            .then(buf => {
+                // 3. 載入資料庫到記憶體
+                db = new SQL.Database(new Uint8Array(buf));
+                $("#dbStatus").text("資料庫載入完成！準備就緒。");
+                $("#nextBtn").prop("disabled", false).text("再來一張");
+                
+                // 4. 馬上顯示第一張圖
+                getRandomImage();
+            })
+            .catch(err => {
+                console.error(err);
+                $("#dbStatus").text("錯誤: " + err.message);
+                alert("資料庫載入失敗，請檢查 console");
+            });
+    });
+
+    // 隨機抽取圖片的主函式
+    function getRandomImage() {
+        if (!db) return;
+
+        $("#mainImg").attr("src", "/images/loading.svg"); // 切換 loading 圖
+        $("#nextBtn").prop("disabled", true); // 防止連續點擊
+
+        try {
+            // 使用 SQL 語法隨機取一筆
+            // 假設 table 名稱為 'illusts' (這是我們在 Action 中設定的)
+            const stmt = db.prepare("SELECT * FROM illusts ORDER BY RANDOM() LIMIT 1");
+            
+            if (stmt.step()) {
+                const row = stmt.getAsObject(); // 轉成 JS 物件 {id:..., title:...}
+                renderData(row);
+            } else {
+                alert("資料庫是空的！");
+            }
+            stmt.free();
+        } catch (e) {
+            console.error(e);
+            alert("讀取資料發生錯誤");
+        }
+        
+        // 短暫延遲後恢復按鈕，避免刷太快
+        setTimeout(() => {
+            $("#nextBtn").prop("disabled", false);
+        }, 500);
+    }
+
+    // 渲染畫面 (與原本邏輯類似)
+    function renderData(data) {
+        // 處理 Tags：資料庫存的可能是 JSON 字串 "['tag1', 'tag2']" 或純字串
+        let tagHtml = "";
+        try {
+            // 嘗試解析 JSON 字串，如果是普通字串則直接顯示
+            const parsedTags = JSON.parse(data.tags.replace(/'/g, '"')); 
+            tagHtml = Array.isArray(parsedTags) ? parsedTags.join(", ") : data.tags;
+        } catch (e) {
+            tagHtml = data.tags;
+        }
+
+        // PID 處理：有些資料庫欄位叫 id，有些叫 pid，這裡做相容
+        const pid = data.pid || data.id;
+
+        $("#pid").html(`<a href="https://www.pixiv.net/artworks/${pid}" target="_blank">${pid}</a>`);
+        $("#title").text(data.title);
+        
+        // 假設 uid 與 author 欄位存在
+        $("#author").html(`<a href="https://www.pixiv.net/users/${data.uid}" target="_blank">${data.author}</a>`);
+        
+        $("#tags").text(tagHtml);
+        
+        // 圖片代理處理 (維持原本的代理網址)
+        // 假設資料庫內的 url 是 "/img/..." 格式，如果不是，請根據實際資料調整
+        // 注意：原本代碼是 https://pixiv.mayx.eu.org + data["url"]
+        const imgUrl = data.url.startsWith('http') ? data.url : "https://pixiv.mayx.eu.org" + data.url;
+        
+        $("#mainImg").attr("src", imgUrl);
+        $("#mainImg").one("error", function() {
+            // 簡單的錯誤重試或顯示裂圖
+            console.log("圖片載入失敗，重試中...");
+            // 可以加入重試邏輯
+        });
+
+        // 日期處理
+        if (data.uploadDate) {
+            $("#uploadDate").text(new Date(data.uploadDate).toLocaleString());
+        } else {
+            $("#uploadDate").text("未知");
+        }
+    }
+</script>
+
+</body>
+</html>
