@@ -17,4 +17,4 @@ echo file_get_contents('https://cdn.jsdelivr.net/gh/Mabbs/pixiv-index/data/'.$ra
 ```
 
 ## 前端演示
-[Setu Viewer](setu.html)
+[Setu Viewer](https://h-o-w-a-r-d.github.io/NSFW_pixiv_pic_index/Viewer.html)
